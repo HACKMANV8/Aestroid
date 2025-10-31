@@ -79,6 +79,7 @@ dependencies {
     // ViewModel & Lifecycle
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.2")
 
     // Ktor
     implementation(libs.ktor.client.core)
