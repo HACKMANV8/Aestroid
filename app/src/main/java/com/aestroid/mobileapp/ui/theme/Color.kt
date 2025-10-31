@@ -2,10 +2,19 @@ package com.aestroid.mobileapp.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
+// Orange and Black Theme Colors
+// Orange variants for accents and highlights
+val OrangePrimary = Color(0xFFFF6600)      // Bright orange
+val OrangeSecondary = Color(0xFFFF8800)    // Lighter orange
+val OrangeTertiary = Color(0xFFFF4400)     // Darker orange
 
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+// Black and dark variants
+val Black = Color(0xFF000000)              // Pure black
+val DarkGray = Color(0xFF1A1A1A)           // Almost black
+val MediumGray = Color(0xFF2A2A2A)         // Dark gray
+val LightGray = Color(0xFF404040)         // Medium gray
+
+// Text colors
+val OrangeText = Color(0xFFFF6600)        // Orange text
+val WhiteText = Color(0xFFFFFFFF)         // White text
+val LightGrayText = Color(0xFFCCCCCC)     // Light gray text

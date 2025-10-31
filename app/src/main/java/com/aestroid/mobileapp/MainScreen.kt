@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,7 +31,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aestroid.mobileapp.ViewModel.MainViewModel
-import com.aestroid.mobileapp.ViewModel.StrategyUiState
 import com.aestroid.mobileapp.UnitConfig
 
 @OptIn(ExperimentalMaterial3Api::class) // Needed for TopAppBar
@@ -39,7 +39,6 @@ fun MainScreen(
     viewModel: MainViewModel = viewModel()
 ) {
     val context = LocalContext.current
-    val uiState by viewModel.uiState.collectAsState()
     val locationStatus by viewModel.locationStatus.collectAsState()
     
     // Unit configuration state
@@ -195,7 +194,7 @@ fun MainScreen(
             TopAppBar(
                 title = { Text("Military Location Tracker") },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    containerColor = Color.Black,
                     titleContentColor = MaterialTheme.colorScheme.primary
                 ),
                 actions = {
@@ -353,53 +352,6 @@ fun MainScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // --- Strategy Response Card (if available) ---
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    when (val state = uiState) {
-                        is StrategyUiState.Loading -> {
-                            CircularProgressIndicator()
-                            Text(
-                                text = "Loading...",
-                                style = MaterialTheme.typography.bodyMedium,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(top = 16.dp)
-                            )
-                        }
-                        is StrategyUiState.Success -> {
-                            Icon(
-                                imageVector = Icons.Default.CheckCircle,
-                                contentDescription = "Success",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(32.dp)
-                            )
-                            Text(
-                                text = state.strategyMessage,
-                                style = MaterialTheme.typography.bodyMedium,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(top = 8.dp)
-                            )
-                        }
-                        is StrategyUiState.Error -> {
-                            Text(
-                                text = state.errorMessage,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
             // --- Control Buttons ---
             Button(
                 onClick = {
@@ -426,17 +378,6 @@ fun MainScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Start Location Tracking")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedButton(
-                onClick = {
-                    viewModel.onUserSendStatusClick()
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Send Status Request")
             }
             
             Spacer(modifier = Modifier.height(16.dp))
