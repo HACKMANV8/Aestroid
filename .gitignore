@@ -1,0 +1,25 @@
+# Local configuration
+/local.properties
+
+# Generated build files
+build/
+*.apk
+*.aab
+
+# IDE files
+*.iml
+.gradle
+.DS_Store
+/captures
+
+# C/C++ build files
+.externalNativeBuild
+.cxx
+
+# Android Studio local settings
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
