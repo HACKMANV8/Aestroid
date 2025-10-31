@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatbot Backend - Real-time Updates</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .connected {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .disconnected {
+            background-color: #f44336;
+            color: white;
+        }
+        .response-item {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 10px 0;
+            background-color: #f9f9f9;
+        }
+        .response-item h3 {
+            margin-top: 0;
+            color: #2196F3;
+        }
+        .response-item .timestamp {
+            color: #666;
+            font-size: 0.9em;
+        }
+        .response-item .response-text {
+            margin: 10px 0;
+            padding: 10px;
+            background: white;
+            border-left: 3px solid #4CAF50;
+        }
+        .response-item .location {
+            color: #FF9800;
+            font-weight: bold;
+        }
+        .response-item .source {
+            display: inline-block;
+            padding: 4px 8px;
+            background: #2196F3;
+            color: white;
+            border-radius: 3px;
+            font-size: 0.8em;
+            margin-left: 10px;
+        }
+        #responses {
+            max-height: 600px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Chatbot Backend - Real-time Response Updates</h1>
+        <div id="status" class="status disconnected">Disconnected</div>
+        <h2>Latest Responses</h2>
+        <div id="responses"></div>
+    </div>
+
+    <script>
+        // Connect to Flask-SocketIO server
+        const socket = io('http://localhost:5000');
+        const statusDiv = document.getElementById('status');
+        const responsesDiv = document.getElementById('responses');
+
+        // Update status on connection
+        socket.on('connect', () => {
+            console.log('Connected to backend');
+            statusDiv.textContent = 'Connected';
+            statusDiv.className = 'status connected';
+            socket.emit('subscribe_updates');
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected from backend');
+            statusDiv.textContent = 'Disconnected';
+            statusDiv.className = 'status disconnected';
+        });
+
+        socket.on('connected', (data) => {
+            console.log('Server confirmed connection:', data);
+        });
+
+        socket.on('subscribed', (data) => {
+            console.log('Subscribed to updates:', data);
+        });
+
+        // Handle real-time response updates
+        socket.on('response_updated', (data) => {
+            console.log('Response updated:', data);
+            
+            // Create response item element
+            const responseItem = document.createElement('div');
+            responseItem.className = 'response-item';
+            
+            let html = `<h3>Response ID: ${data.response_id}`;
+            if (data.update_source) {
+                html += `<span class="source">${data.update_source}</span>`;
+            }
+            html += `</h3>`;
+            
+            html += `<div class="timestamp">Timestamp: ${data.timestamp || new Date().toISOString()}</div>`;
+            
+            if (data.location) {
+                html += `<div class="location">📍 Location: ${JSON.stringify(data.location)}</div>`;
+            }
+            
+            if (data.mobile_timestamp) {
+                html += `<div class="timestamp">Mobile Timestamp: ${data.mobile_timestamp}</div>`;
+            }
+            
+            html += `<div class="response-text">${escapeHtml(data.response)}</div>`;
+            
+            responseItem.innerHTML = html;
+            
+            // Insert at the top of the responses list
+            responsesDiv.insertBefore(responseItem, responsesDiv.firstChild);
+        });
+
+        // Helper function to escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
+

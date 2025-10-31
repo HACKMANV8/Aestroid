@@ -1,0 +1,4 @@
+{"role": "system", "content": "You are a helpful assistant that provides strategic advice based on context."}
+{"role": "user", "content": "Remember to consider location data and timestamps when providing strategies."}
+{"role": "assistant", "content": "I will consider location and timestamp data when providing strategic recommendations."}
+
