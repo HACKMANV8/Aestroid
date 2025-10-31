@@ -7,13 +7,13 @@ import requests
 import json
 
 from ui_components import (
-    GyroControl, MarkerSelector, draw_markers, export_markers_to_json,
+    MarkerSelector, export_markers_to_json,
     MARKER_TYPES, GYRO_CENTER, GYRO_RADIUS
 )
 
 API_URL = "http://localhost:8080/api/markers"
+REMOTE_URL = "http://localhost:6969"  # your ncat server
 UPDATE_INTERVAL = 1.0  # seconds
-SOLDIER_URL = "http://localhost:6969"  # expects JSON: {"lat": <float>, "lon": <float>}
 
 
 # --- Live update client thread ---
@@ -30,34 +30,55 @@ class LiveClient(threading.Thread):
                 if data:
                     requests.post(API_URL, json=data, timeout=2)
             except Exception as e:
-                # Fail silently to avoid crashing the viewer
                 print(f"⚠️ Live update failed: {e}")
             time.sleep(UPDATE_INTERVAL)
 
 
-# --- Soldier location client thread ---
-class SoldierClient(threading.Thread):
-    def __init__(self, on_update):
+# --- Remote marker fetcher ---
+class RemoteMarkerFetcher(threading.Thread):
+    def __init__(self, url, update_callback, interval=2.0):
         super().__init__(daemon=True)
-        self.on_update = on_update
+        self.url = url
+        self.update_callback = update_callback
+        self.interval = interval
         self.running = True
+        self.last_success = None
+        self.error_count = 0
 
     def run(self):
+        print(f"🚀 Remote marker fetcher started, polling: {self.url}")
         while self.running:
             try:
-                resp = requests.get(SOLDIER_URL, timeout=2)
-                if resp.ok:
-                    payload = resp.json()
-                    lat = payload.get("lat")
-                    lon = payload.get("lon")
-                    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-                        self.on_update(float(lat), float(lon))
+                resp = requests.get(self.url, timeout=2)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if "lat" in data and "lon" in data:
+                        self.update_callback(data["lat"], data["lon"])
+                        self.last_success = time.time()
+                        self.error_count = 0
+                    else:
+                        print(f"⚠️ Remote data missing lat/lon: {data}")
+                else:
+                    print(f"⚠️ Remote server returned status {resp.status_code}")
+                    self.error_count += 1
+            except requests.exceptions.ConnectionError:
+                self.error_count += 1
+                if self.error_count == 1:  # Print only first error
+                    print(f"⚠️ Cannot connect to {self.url} - is the server running?")
+            except requests.exceptions.Timeout:
+                self.error_count += 1
+                if self.error_count == 1:
+                    print(f"⚠️ Request timeout to {self.url}")
             except Exception as e:
-                print(f"⚠️ Soldier fetch failed: {e}")
-            time.sleep(UPDATE_INTERVAL)
+                if self.error_count == 0:
+                    print(f"❌ Remote fetch error: {e}")
+                self.error_count += 1
+            
+            time.sleep(self.interval)
 
 
 # --- Load terrain data ---
+print("Loading terrain data...")
 df = pd.read_json("terrain_data.jsonl", lines=True)
 df = df[df["elevation"].notnull()]
 
@@ -82,6 +103,7 @@ for i, lat in enumerate(lats):
 zmin, zmax = elev_grid.min(), elev_grid.max()
 elev_grid_norm = (elev_grid - zmin) / (zmax - zmin)
 
+print("Computing terrain colors...")
 color_grid = np.zeros((len(lats), len(lons), 3), dtype=np.uint8)
 for i in range(len(lats)):
     for j in range(len(lons)):
@@ -104,15 +126,86 @@ for i in range(len(lats)):
 pygame.init()
 WIDTH, HEIGHT = 1200, 800
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("3D Terrain Viewer (Yaw + Roll + Live Sync)")
+pygame.display.set_caption("3D Terrain Viewer (Live API + Remote Marker)")
 clock = pygame.time.Clock()
 font = pygame.font.Font(None, 24)
 font_small = pygame.font.Font(None, 18)
 
+# --- Gyro control class ---
+class GyroControl:
+    """Gyro control widget for adjusting yaw and roll angles"""
+    
+    def __init__(self, center, radius, font, font_small):
+        self.center = center
+        self.radius = radius
+        self.font = font
+        self.font_small = font_small
+    
+    def is_inside(self, pos):
+        """Check if position is inside the gyro control"""
+        dx = pos[0] - self.center[0]
+        dy = pos[1] - self.center[1]
+        return dx * dx + dy * dy <= self.radius * self.radius
+    
+    def update_angles(self, pos, angle_yaw, angle_roll):
+        """Update angles based on mouse position in gyro"""
+        import math
+        dx = pos[0] - self.center[0]
+        dy = pos[1] - self.center[1]
+        dist = math.sqrt(dx * dx + dy * dy)
+        
+        # Constrain to radius
+        if dist > self.radius * 0.8:
+            s = self.radius * 0.8 / dist
+            dx *= s
+            dy *= s
+        
+        yaw_norm = (dx / (self.radius * 0.8)) / 2 + 0.5
+        roll_norm = -(dy / (self.radius * 0.8)) / 2 + 0.5
+        new_yaw = yaw_norm * 2 * np.pi
+        new_roll = np.clip(roll_norm * np.pi, 0, np.pi)
+        
+        return new_yaw, new_roll
+    
+    def draw(self, surface, angle_yaw, angle_roll):
+        """Draw the gyro control widget"""
+        import math
+        cx, cy = self.center
+        
+        # Draw background circles
+        pygame.draw.circle(surface, (40, 40, 50), self.center, self.radius + 5)
+        pygame.draw.circle(surface, (25, 25, 35), self.center, self.radius)
+        
+        # Draw crosshairs
+        pygame.draw.line(surface, (60, 60, 70), (cx - self.radius, cy), (cx + self.radius, cy))
+        pygame.draw.line(surface, (60, 60, 70), (cx, cy - self.radius), (cx, cy + self.radius))
+        
+        # Draw indicator
+        yaw_norm = (angle_yaw / (2 * np.pi)) % 1
+        roll_norm = (angle_roll / np.pi)
+        dx = (yaw_norm - 0.5) * 2 * self.radius * 0.8
+        dy = -(roll_norm - 0.5) * 2 * self.radius * 0.8
+        ind_x = int(cx + dx)
+        ind_y = int(cy + dy)
+        pygame.draw.circle(surface, (100, 200, 255), (ind_x, ind_y), 8)
+        pygame.draw.circle(surface, (150, 220, 255), (ind_x, ind_y), 6)
+        
+        # Draw label
+        label = self.font.render("GYRO", True, (200, 200, 200))
+        surface.blit(label, (cx - 25, cy - self.radius - 25))
+        
+        # Draw angle info
+        yaw_deg = math.degrees(angle_yaw) % 360
+        roll_deg = math.degrees(angle_roll)
+        info = self.font_small.render(f"Yaw: {yaw_deg:.0f}°", True, (180, 180, 180))
+        surface.blit(info, (cx - 35, cy + self.radius + 10))
+        info2 = self.font_small.render(f"Roll: {roll_deg:.0f}°", True, (180, 180, 180))
+        surface.blit(info2, (cx - 35, cy + self.radius + 28))
+
+
 gyro_control = GyroControl(GYRO_CENTER, GYRO_RADIUS, font, font_small)
 marker_selector = MarkerSelector(280, 310, WIDTH - 280 - 20, 20, font, font_small)
 markers = []
-location_of_soldier = None  # (lat, lon)
 
 SCALE_X, SCALE_Y, HEIGHT_SCALE = 10, 10, 250
 angle_yaw = np.radians(45)
@@ -127,6 +220,55 @@ last_mouse_pos = (0, 0)
 terrain_surface = None
 points = None
 needs_redraw = True
+
+
+# --- Enhanced marker drawing function ---
+def draw_markers(surface, markers, points, font):
+    """Draw all placed markers on the terrain with special handling for remote markers"""
+    px, py = points
+    
+    for marker in markers:
+        i, j = marker['pos']
+        mx, my = px[i, j], py[i, j]
+        team = marker['team']
+        marker_type = marker['type']
+        
+        # Check if this is a remote marker
+        is_remote = marker['id'].startswith('REMOTE-')
+        
+        info = MARKER_TYPES[team][marker_type]
+        color = info['color']
+        
+        if is_remote:
+            # Make remote marker more prominent with pulsing effect
+            pulse = int(15 * abs(np.sin(pygame.time.get_ticks() / 300)))
+            
+            # Larger pulsing circle for remote marker
+            pygame.draw.circle(surface, (255, 255, 0), (mx, my), 18 + pulse // 2, 3)
+            pygame.draw.circle(surface, color, (mx, my), 14, 2)
+            
+            # Draw special crosshair
+            pygame.draw.line(surface, (255, 255, 0), (mx - 10, my - 10), (mx + 10, my + 10), 4)
+            pygame.draw.line(surface, (255, 255, 0), (mx - 10, my + 10), (mx + 10, my - 10), 4)
+            
+            # Draw "LIVE" label
+            label = font.render("LIVE", True, (255, 255, 0))
+            label_bg = pygame.Surface((label.get_width() + 8, label.get_height() + 4))
+            label_bg.fill((0, 0, 0))
+            label_bg.set_alpha(180)
+            surface.blit(label_bg, (mx - label.get_width() // 2 - 4, my - 40))
+            surface.blit(label, (mx - label.get_width() // 2, my - 38))
+            
+            # Draw simple star for location
+            star_size = 8
+            pygame.draw.circle(surface, (255, 255, 100), (mx, my), star_size, 0)
+        else:
+            # Regular marker drawing
+            pygame.draw.line(surface, color, (mx - 6, my - 6), (mx + 6, my + 6), 3)
+            pygame.draw.line(surface, color, (mx - 6, my + 6), (mx + 6, my - 6), 3)
+            pygame.draw.circle(surface, color, (mx, my), 10, 2)
+            symbol = font.render(info['symbol'], True, color)
+            surface.blit(symbol, (mx - 8, my - 25))
 
 
 # --- Projection ---
@@ -161,12 +303,6 @@ def recompute_surface():
     return surf, (px, py)
 
 
-def latlon_to_index(lat, lon):
-    i = int(np.argmin(np.abs(np.array(lats) - lat)))
-    j = int(np.argmin(np.abs(np.array(lons) - lon)))
-    return i, j
-
-
 def get_live_state():
     """Prepare JSON payload for live updates"""
     return {
@@ -187,27 +323,64 @@ def get_live_state():
     }
 
 
-# Start live client thread
-live_client = LiveClient(get_live_state)
-live_client.start()
+def update_remote_marker(lat, lon):
+    """Add or move a special remote marker from external API"""
+    global markers, needs_redraw
+    
+    print(f"🔍 Received remote coords: lat={lat:.5f}, lon={lon:.5f}")
+    print(f"   Lat range: {min(lats):.5f} to {max(lats):.5f}")
+    print(f"   Lon range: {min(lons):.5f} to {max(lons):.5f}")
+    
+    # Check if coordinates are in range
+    if lat < min(lats) or lat > max(lats):
+        print(f"⚠️ WARNING: Latitude {lat:.5f} is OUT OF RANGE!")
+        return
+    if lon < min(lons) or lon > max(lons):
+        print(f"⚠️ WARNING: Longitude {lon:.5f} is OUT OF RANGE!")
+        return
+    
+    i = np.abs(np.array(lats) - lat).argmin()
+    j = np.abs(np.array(lons) - lon).argmin()
+    marker_id = "REMOTE-0001"
+    
+    print(f"   Mapped to grid: i={i}, j={j} (out of {len(lats)}x{len(lons)})")
+    print(f"   Actual coords: lat={lats[i]:.5f}, lon={lons[j]:.5f}")
 
+    # Remove old remote marker
+    markers = [m for m in markers if m["id"] != marker_id]
 
-def on_soldier_update(lat, lon):
-    global location_of_soldier, needs_redraw
-    location_of_soldier = (lat, lon)
+    # Add new remote marker
+    markers.append({
+        "id": marker_id,
+        "pos": (i, j),
+        "type": "5",  # Objective icon
+        "team": "friendly"
+    })
+    
+    print(f"✅ Remote marker placed! Total markers: {len(markers)}")
     needs_redraw = True
 
 
-# Start soldier client thread
-soldier_client = SoldierClient(on_soldier_update)
-soldier_client.start()
+# --- Start threads ---
+live_client = LiveClient(get_live_state)
+live_client.start()
+
+remote_fetcher = RemoteMarkerFetcher(REMOTE_URL, update_remote_marker)
+remote_fetcher.start()
+
+print(f"📍 Terrain bounds: lat=[{min(lats):.5f}, {max(lats):.5f}], lon=[{min(lons):.5f}, {max(lons):.5f}]")
+print("✅ Terrain viewer ready!")
 
 # --- Initial terrain render ---
+print("Rendering initial terrain...")
 terrain_surface, points = recompute_surface()
 needs_redraw = False
 
 running = True
+frame_count = 0
+
 while running:
+    frame_count += 1
     keys_pressed = pygame.key.get_pressed()
     ctrl_pressed = keys_pressed[pygame.K_LCTRL] or keys_pressed[pygame.K_RCTRL]
     
@@ -314,33 +487,25 @@ while running:
                 team = marker_selector.get_current_team()
                 print(f"Selected marker: {MARKER_TYPES[team][event.unicode]['name']}")
 
+    # Check if we need to redraw for remote marker animation
+    has_remote_marker = any(m['id'].startswith('REMOTE-') for m in markers)
+    
     if needs_redraw:
         terrain_surface, points = recompute_surface()
         needs_redraw = False
-
+    
+    # Always render the screen
     screen.fill((0, 0, 0))
     screen.blit(terrain_surface, (0, 0))
     draw_markers(screen, markers, points, font)
     gyro_control.draw(screen, angle_yaw, angle_roll)
     marker_selector.draw(screen)
-
-    # Draw soldier location if available
-    if location_of_soldier and points is not None:
-        try:
-            lat, lon = location_of_soldier
-            si, sj = latlon_to_index(lat, lon)
-            px, py = points
-            sx, sy = int(px[si, sj]), int(py[si, sj])
-            pygame.draw.circle(screen, (255, 80, 80), (sx, sy), 6)
-            label = font_small.render("Soldier", True, (255, 200, 200))
-            screen.blit(label, (sx + 8, sy - 10))
-        except Exception:
-            pass
-
+    
     pygame.display.flip()
-    clock.tick(60)
+    clock.tick(60 if has_remote_marker else 30)  # Higher FPS when animating
 
 live_client.running = False
-soldier_client.running = False
+remote_fetcher.running = False
 pygame.quit()
+print("👋 Terrain viewer closed")
 
