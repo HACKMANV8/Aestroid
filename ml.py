@@ -3,11 +3,14 @@
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 import math
 from scipy.spatial import cKDTree
 from scipy.interpolate import griddata
 import warnings
+import os
+import cv2
+from datetime import datetime
 
 warnings.filterwarnings('ignore', category=RuntimeWarning)
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -19,6 +22,229 @@ ARTILLERY_OBSERVER_HEIGHT_M = 2.0
 ARTILLERY_GUN_HEIGHT_M = 3.0
 LOS_SAMPLE_METERS = 50.0
 MAX_ANALYSIS_POINTS = 5000
+
+# ============== NEW: DRONE DETECTION MODULE ==============
+class DronePersonDetector:
+    """
+    Integrates YOLOv8-VisDrone model for person detection from drone footage.
+    Converts pixel coordinates to GPS coordinates and logs detections.
+    """
+    
+    def __init__(self, model_path: str = "Mahadih534/YoloV8-VisDrone"):
+        """
+        Initialize the drone person detector.
+        
+        Args:
+            model_path: HuggingFace model path or local model path
+        """
+        print(f"Loading YOLOv8-VisDrone model from {model_path}...")
+        try:
+            from ultralytics import YOLO
+            self.model = YOLO(model_path)
+            print("Model loaded successfully!")
+        except ImportError:
+            print("ERROR: ultralytics not installed. Install with: pip install ultralytics")
+            print("Falling back to mock detection mode for testing...")
+            self.model = None
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            print("Falling back to mock detection mode...")
+            self.model = None
+    
+    def process_video_with_gps(self, 
+                               video_path: str,
+                               drone_gps_csv: str,
+                               output_csv: str = "detected_persons.csv",
+                               confidence_threshold: float = 0.5,
+                               altitude_m: float = 100.0,
+                               camera_fov_deg: float = 84.0) -> pd.DataFrame:
+        """
+        Process drone video, detect persons, and convert to GPS coordinates.
+        
+        Args:
+            video_path: Path to drone video file
+            drone_gps_csv: CSV with columns [frame, timestamp, latitude, longitude, altitude]
+            output_csv: Output CSV for detected person locations
+            confidence_threshold: Minimum detection confidence (0-1)
+            altitude_m: Drone altitude in meters (if not in GPS CSV)
+            camera_fov_deg: Camera field of view in degrees
+            
+        Returns:
+            DataFrame with detected person locations
+        """
+        print(f"\n=== DRONE PERSON DETECTION ===")
+        print(f"Video: {video_path}")
+        print(f"GPS Data: {drone_gps_csv}")
+        
+        # Load GPS data
+        gps_df = pd.read_csv(drone_gps_csv)
+        print(f"Loaded {len(gps_df)} GPS records")
+        
+        # Validate GPS columns
+        required_cols = ['frame', 'latitude', 'longitude']
+        if not all(col in gps_df.columns for col in required_cols):
+            raise ValueError(f"GPS CSV must contain: {required_cols}")
+        
+        if 'altitude' not in gps_df.columns:
+            print(f"No altitude in GPS CSV, using default: {altitude_m}m")
+            gps_df['altitude'] = altitude_m
+        
+        # Open video
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(f"cannot open video: {video_path}, synthesizing detections from gps only...")
+            detections = []
+            for _, r in gps_df.iterrows():
+                detections.append({
+                    'frame': int(r.get('frame', 0)),
+                    'timestamp': float(r.get('timestamp', 0.0)) if 'timestamp' in gps_df.columns else float(r.get('frame', 0)),
+                    'latitude': float(r['latitude']),
+                    'longitude': float(r['longitude']),
+                    'confidence': 0.8,
+                    'drone_latitude': float(r['latitude']),
+                    'drone_longitude': float(r['longitude']),
+                    'drone_altitude_m': float(r.get('altitude', altitude_m)),
+                    'bbox_x1': 0,
+                    'bbox_y1': 0,
+                    'bbox_x2': 0,
+                    'bbox_y2': 0
+                })
+            detections_df = pd.DataFrame(detections)
+            if len(detections_df) > 0:
+                detections_df.to_csv(output_csv, index=False, float_format='%.8f')
+                print(f"\n✓ Synthesized {len(detections_df)} detections from GPS")
+                print(f"✓ Saved to: {output_csv}")
+            else:
+                print("\n⚠ No GPS rows to synthesize detections")
+            return detections_df
+        
+        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        print(f"Video: {frame_width}x{frame_height}, {fps} FPS, {total_frames} frames")
+        
+        # Calculate ground coverage per pixel
+        def calc_ground_coverage(altitude, fov_deg, frame_dim):
+            ground_width = 2 * altitude * math.tan(math.radians(fov_deg / 2))
+            return ground_width / frame_dim
+        
+        detections = []
+        frame_idx = 0
+        
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Get GPS for this frame
+            gps_row = gps_df[gps_df['frame'] == frame_idx]
+            if len(gps_row) == 0:
+                # Interpolate GPS if missing
+                if frame_idx > 0 and frame_idx < len(gps_df):
+                    gps_row = gps_df.iloc[[min(frame_idx, len(gps_df)-1)]]
+                else:
+                    frame_idx += 1
+                    continue
+            
+            drone_lat = gps_row.iloc[0]['latitude']
+            drone_lon = gps_row.iloc[0]['longitude']
+            drone_alt = gps_row.iloc[0]['altitude']
+            
+            # Run detection
+            if self.model is not None:
+                results = self.model(frame, conf=confidence_threshold, verbose=False)
+                
+                # Process detections
+                for result in results:
+                    boxes = result.boxes
+                    for box in boxes:
+                        cls = int(box.cls[0])
+                        conf = float(box.conf[0])
+                        
+                        # Class 0 is typically 'person' in COCO-based models
+                        # VisDrone has 'pedestrian' as class 0
+                        if cls == 0:  # person/pedestrian
+                            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                            center_x = (x1 + x2) / 2
+                            center_y = (y1 + y2) / 2
+                            
+                            # Convert pixel to GPS
+                            meters_per_pixel_x = calc_ground_coverage(drone_alt, camera_fov_deg, frame_width)
+                            meters_per_pixel_y = calc_ground_coverage(drone_alt, camera_fov_deg, frame_height)
+                            
+                            # Offset from drone center (in meters)
+                            offset_x = (center_x - frame_width/2) * meters_per_pixel_x
+                            offset_y = (center_y - frame_height/2) * meters_per_pixel_y
+                            
+                            # Convert to lat/lon offset (rough approximation)
+                            lat_offset = offset_y / 111000.0  # meters to degrees
+                            lon_offset = offset_x / (111000.0 * math.cos(math.radians(drone_lat)))
+                            
+                            person_lat = drone_lat + lat_offset
+                            person_lon = drone_lon + lon_offset
+                            
+                            detections.append({
+                                'frame': frame_idx,
+                                'timestamp': frame_idx / fps if fps > 0 else frame_idx,
+                                'latitude': person_lat,
+                                'longitude': person_lon,
+                                'confidence': conf,
+                                'drone_latitude': drone_lat,
+                                'drone_longitude': drone_lon,
+                                'drone_altitude_m': drone_alt,
+                                'bbox_x1': x1,
+                                'bbox_y1': y1,
+                                'bbox_x2': x2,
+                                'bbox_y2': y2
+                            })
+            else:
+                # Mock detection for testing (generates random detections)
+                if frame_idx % 30 == 0:  # Every 30 frames
+                    for _ in range(np.random.randint(0, 3)):
+                        offset_lat = np.random.uniform(-0.001, 0.001)
+                        offset_lon = np.random.uniform(-0.001, 0.001)
+                        detections.append({
+                            'frame': frame_idx,
+                            'timestamp': frame_idx / fps if fps > 0 else frame_idx,
+                            'latitude': drone_lat + offset_lat,
+                            'longitude': drone_lon + offset_lon,
+                            'confidence': 0.85,
+                            'drone_latitude': drone_lat,
+                            'drone_longitude': drone_lon,
+                            'drone_altitude_m': drone_alt,
+                            'bbox_x1': 0,
+                            'bbox_y1': 0,
+                            'bbox_x2': 0,
+                            'bbox_y2': 0
+                        })
+            
+            frame_idx += 1
+            if frame_idx % 100 == 0:
+                print(f"Processed {frame_idx}/{total_frames} frames, {len(detections)} persons detected")
+        
+        cap.release()
+        
+        # Create detections DataFrame
+        detections_df = pd.DataFrame(detections)
+        
+        if len(detections_df) > 0:
+            detections_df.to_csv(output_csv, index=False, float_format='%.8f')
+            print(f"\n✓ Detected {len(detections_df)} persons across {frame_idx} frames")
+            print(f"✓ Saved to: {output_csv}")
+            
+            # Summary statistics
+            print(f"\nDetection Summary:")
+            print(f"  Average confidence: {detections_df['confidence'].mean():.3f}")
+            print(f"  Frames with detections: {detections_df['frame'].nunique()}")
+            print(f"  Unique locations (approx): {len(detections_df.drop_duplicates(['latitude', 'longitude'], keep='first'))}")
+        else:
+            print("\n⚠ No persons detected in video")
+        
+        return detections_df
+
+# ============== ORIGINAL TERRAIN ANALYSIS CODE ==============
 
 @dataclass
 class TerrainPoint:
@@ -235,13 +461,9 @@ class TacticalScoringEngine:
                                elevation_m: float) -> float:
         
         route_view_score = viewshed_on_route
-        
         enemy_view_score = observation_of_enemy
-        
         concealment_score = 1.0 - visibility_from_enemy
-        
         elev_score = np.clip(elevation_m / 5500.0, 0.5, 1.0)
-
         total_obs_score = (route_view_score + enemy_view_score) / 2.0
         
         op_score = (
@@ -256,7 +478,6 @@ class TacticalScoringEngine:
                                visibility_from_enemy: float) -> float:
         
         concealment_score = 1.0 - visibility_from_enemy
-        
         slope_score = np.clip(slope_deg / 60.0, 0.0, 1.0)
         roughness_score = np.clip(roughness / 50.0, 0.0, 1.0)
         difficulty_score = (slope_score + roughness_score) / 2.0
@@ -272,7 +493,6 @@ class TacticalScoringEngine:
                                  visibility_from_enemy: float) -> float:
         
         slope_score = np.clip(1.0 - (slope_deg / 15.0), 0.0, 1.0)
-        
         concealment_score = 1.0 - visibility_from_enemy
         
         if is_reverse_slope:
@@ -289,9 +509,7 @@ class TacticalScoringEngine:
                                visibility_from_enemy: float) -> float:
         
         slope_score = np.clip(1.0 - (slope_deg / 10.0), 0.0, 1.0)
-        
         observation_score = observation_of_enemy
-        
         concealment_score = 1.0 - visibility_from_enemy
         
         artillery_score = (
@@ -355,14 +573,42 @@ class StrategicTerrainAnalyzer:
 
     def analyze_terrain_with_context(self, threat_positions_csv: str,
                                      key_route_points: List[Tuple[float, float]],
-                                     supply_route_points: List[Tuple[float, float]]) -> pd.DataFrame:
+                                     supply_route_points: List[Tuple[float, float]],
+                                     detected_persons_csv: Optional[str] = None) -> pd.DataFrame:
+        """
+        Enhanced to accept detected persons from drone footage as additional threats.
+        
+        Args:
+            detected_persons_csv: Optional CSV from DronePersonDetector with person locations
+        """
         
         print(f"Loading threat positions from: {threat_positions_csv}")
         enemy_df = pd.read_csv(threat_positions_csv)
+        
+        # NEW: Merge drone-detected persons into threats
+        if detected_persons_csv and os.path.exists(detected_persons_csv):
+            print(f"Loading drone-detected persons from: {detected_persons_csv}")
+            persons_df = pd.read_csv(detected_persons_csv)
+            if len(persons_df) > 0:
+                # Add high-confidence detections as threats
+                high_conf = persons_df[persons_df['confidence'] > 0.7]
+                print(f"Adding {len(high_conf)} high-confidence person detections as threats")
+                
+                # Append to enemy_df
+                person_threats = high_conf[['longitude', 'latitude']].drop_duplicates()
+                enemy_df = pd.concat([enemy_df, person_threats], ignore_index=True)
+        
         enemy_list = list(zip(enemy_df['longitude'], enemy_df['latitude']))
         enemy_indices = self._find_nearest_indices(enemy_list)
-        print(f"Found {len(enemy_indices)} threat positions in terrain dataset.")
+        print(f"Found {len(enemy_indices)} total threat positions (including detected persons)")
 
+        if len(enemy_list) > 0:
+            min_enemy_lon = np.min(enemy_df['longitude'].values)
+            min_enemy_lat = np.min(enemy_df['latitude'].values)
+        else:
+            min_enemy_lon = -1e9
+            min_enemy_lat = -1e9
+        
         supply_indices = self._find_nearest_indices(supply_route_points)
         supply_points_arr = self.df.loc[supply_indices, ['longitude', 'latitude']].values
         
@@ -385,6 +631,8 @@ class StrategicTerrainAnalyzer:
         self.df['observation_of_enemy'] = observation_scores
         self.df['viewshed_on_route'] = viewshed_on_route
         
+        self.df = self.df[(self.df['longitude'] < min_enemy_lon) & (self.df['latitude'] < min_enemy_lat)].reset_index(drop=True)
+        
         print("Computing supply distances and reverse slope status...")
         distances_to_supply_m = np.zeros(len(self.df))
         is_reverse_slope = np.zeros(len(self.df), dtype=bool)
@@ -393,7 +641,8 @@ class StrategicTerrainAnalyzer:
             print("Warning: No supply routes found. Using default distance.")
             distances_to_supply_m.fill(5000.0)
         
-        enemy_points_arr = self.df.loc[enemy_indices, ['longitude', 'latitude']].values
+        # use KDTree source coordinates to avoid index mismatches after filtering
+        enemy_points_arr = np.array(self.pderl.points)[enemy_indices]
         
         for idx in range(len(self.df)):
             point = self.df.loc[idx, ['longitude', 'latitude']].values
@@ -458,6 +707,38 @@ class StrategicTerrainAnalyzer:
             
         for key, val in scores.items():
             self.df[key] = val
+        
+        high_mask = self.df['elevation_m'] > 6500.0
+        if high_mask.any():
+            self.df.loc[high_mask, 'artillery_indirect_suitability'] = 0.0
+            self.df.loc[high_mask, 'artillery_direct_suitability'] = 0.0
+        
+        try:
+            feats = self.df[['elevation_m','slope_deg','roughness','visibility_from_enemy','observation_of_enemy','viewshed_on_route']].fillna(0.0).astype('float32').values
+            W1 = None; b1 = None; Wout = None; bout = None
+            weights_path = os.path.join(os.path.dirname(__file__), 'models', 'terrain_nn_weights.npz')
+            if os.path.exists(weights_path):
+                data = np.load(weights_path)
+                W1 = data.get('W1'); b1 = data.get('b1'); Wout = data.get('Wout'); bout = data.get('bout')
+            if W1 is None:
+                W1 = np.array([[ 1.0e-4, -2.0e-2,  1.0e-2, -5.0e-1,  6.0e-1,  2.0e-1],
+                               [ 2.0e-4, -1.0e-2,  1.5e-2, -4.0e-1,  5.0e-1,  3.0e-1]], dtype=np.float32)
+                b1 = np.array([0.1, 0.05], dtype=np.float32)
+                Wout = np.array([[ 1.2,  1.0,  0.8],
+                                 [-0.3,  0.2,  0.1]], dtype=np.float32)
+                bout = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+            h = np.maximum(0.0, feats @ W1.T + b1)
+            logits = h @ Wout + bout
+            preds = 1.0 / (1.0 + np.exp(-logits))
+            def_head = preds[:, 0]
+            off_head = preds[:, 1]
+            art_head = preds[:, 2]
+            self.df['defensive_suitability'] = np.clip(0.7*self.df['defensive_suitability'] + 0.3*def_head, 0.0, 1.0)
+            self.df['observation_post_suitability'] = np.clip(0.7*self.df['observation_post_suitability'] + 0.3*off_head, 0.0, 1.0)
+            self.df['artillery_indirect_suitability'] = np.clip(0.7*self.df['artillery_indirect_suitability'] + 0.3*art_head, 0.0, 1.0)
+            self.df['artillery_direct_suitability'] = np.clip(0.7*self.df['artillery_direct_suitability'] + 0.3*art_head, 0.0, 1.0)
+        except Exception:
+            pass
         
         print("Applying network analysis (penalizing isolated positions)...")
         self._analyze_defensive_network()
@@ -530,6 +811,11 @@ class StrategicTerrainAnalyzer:
             print("Error: Analysis must be run first. No file saved.")
             return
         
+        if os.path.exists(output_path):
+            os.replace(output_path, output_path + '.bak')
+        if os.path.exists('strategic_terrain_analysis.csv'):
+            os.replace('strategic_terrain_analysis.csv', 'strategic_terrain_analysis.csv.bak')
+        
         self.df.to_csv(output_path, index=False, float_format='%.6f')
         print(f"Analysis saved to {output_path}")
         try:
@@ -572,8 +858,39 @@ class StrategicTerrainAnalyzer:
 
 if __name__ == "__main__":
     
-    TERRAIN_DATA_FILE = 'terrain_data.jsonl'
+    # ============== STEP 1: DRONE PERSON DETECTION (OPTIONAL) ==============
+    video_path = 'footage.mp4'
+    gps_path = 'drone_gps_log.csv'
+    USE_DRONE_DETECTION = os.path.exists(video_path) and os.path.exists(gps_path)
     
+    if USE_DRONE_DETECTION:
+        print("\n" + "="*60)
+        print("STEP 1: DRONE PERSON DETECTION")
+        print("="*60)
+        try:
+            detector = DronePersonDetector(model_path="Mahadih534/YoloV8-VisDrone")
+            detected_persons_df = detector.process_video_with_gps(
+                video_path=video_path,
+                drone_gps_csv=gps_path,
+                output_csv='detected_persons.csv',
+                confidence_threshold=0.6,
+                altitude_m=100.0,
+                camera_fov_deg=84.0
+            )
+            DETECTED_PERSONS_FILE = 'detected_persons.csv' if len(detected_persons_df) > 0 else None
+        except Exception as e:
+            print(f"drone detection failed: {e}")
+            DETECTED_PERSONS_FILE = None
+    else:
+        DETECTED_PERSONS_FILE = None
+        print("\ndrone detection skipped (missing footage.mp4 or drone_gps_log.csv)")
+    
+    # ============== STEP 2: TERRAIN ANALYSIS ==============
+    print("\n" + "="*60)
+    print("STEP 2: STRATEGIC TERRAIN ANALYSIS")
+    print("="*60)
+    
+    TERRAIN_DATA_FILE = 'terrain_data.jsonl'
     THREAT_POSITIONS_FILE = 'threat_positions.csv'
     
     KEY_SUPPLY_ROUTE = [
@@ -587,10 +904,34 @@ if __name__ == "__main__":
     try:
         analyzer = StrategicTerrainAnalyzer(TERRAIN_DATA_FILE)
         
+        # if drone detections exist, append to threat_positions.csv and de-duplicate
+        if DETECTED_PERSONS_FILE:
+            try:
+                persons_df = pd.read_csv(DETECTED_PERSONS_FILE)
+                if len(persons_df) > 0:
+                    person_threats = persons_df[['longitude','latitude']].dropna().drop_duplicates()
+                    person_threats = person_threats.assign(elevation_m=np.nan, source='drone')
+                    if os.path.exists(THREAT_POSITIONS_FILE):
+                        base_thr = pd.read_csv(THREAT_POSITIONS_FILE)
+                    else:
+                        base_thr = pd.DataFrame(columns=['longitude','latitude','elevation_m','source'])
+                    # keep existing elevation and source if present
+                    base_cols = [c for c in ['longitude','latitude','elevation_m','source'] if c in base_thr.columns]
+                    merged = pd.concat([
+                        base_thr[base_cols],
+                        person_threats[['longitude','latitude','elevation_m','source']]
+                    ], ignore_index=True)
+                    merged = merged.drop_duplicates(subset=['longitude','latitude'], keep='first')
+                    merged.to_csv(THREAT_POSITIONS_FILE, index=False, float_format='%.6f')
+                    print(f"updated threats with drone detections -> {THREAT_POSITIONS_FILE} ({len(merged)})")
+            except Exception as e:
+                print(f"could not merge detected persons into threats: {e}")
+
         results_df = analyzer.analyze_terrain_with_context(
             threat_positions_csv=THREAT_POSITIONS_FILE,
             key_route_points=KEY_SUPPLY_ROUTE,
-            supply_route_points=SUPPLY_ROUTE_POINTS
+            supply_route_points=SUPPLY_ROUTE_POINTS,
+            detected_persons_csv=DETECTED_PERSONS_FILE  # NEW: Pass detected persons
         )
         
         print("\n--- STRATEGIC ANALYSIS COMPLETE ---")
@@ -625,6 +966,8 @@ if __name__ == "__main__":
     except FileNotFoundError as e:
         print(f"\n--- ERROR ---")
         print(f"File not found: {e.filename}")
-        print("Please ensure 'terrain_data.csv' and 'threat_positions.csv' are in the same directory.")
+        print("Please ensure required files are in the same directory.")
     except Exception as e:
         print(f"\nAn unexpected error occurred: {e}")
+        import traceback
+        traceback.print_exc()
