@@ -1,17 +1,28 @@
 import { Request, Response } from 'express';
 import Groq from 'groq-sdk';
 import Chat from '../models/Chat';
+import dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
 
 // Validate API key on startup
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
+let groq: Groq | null = null;
+
 if (!GROQ_API_KEY) {
   console.warn('⚠️  WARNING: GROQ_API_KEY is not set in environment variables');
   console.warn('⚠️  Chat functionality will not work without a valid API key');
+} else {
+  try {
+    groq = new Groq({
+      apiKey: GROQ_API_KEY,
+    });
+    console.log('✅ Groq client initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize Groq client:', error);
+  }
 }
-
-const groq = new Groq({
-  apiKey: GROQ_API_KEY,
-});
 
 export const sendMessage = async (req: Request, res: Response) => {
   try {
@@ -22,7 +33,7 @@ export const sendMessage = async (req: Request, res: Response) => {
     }
 
     // Check if API key is configured
-    if (!GROQ_API_KEY) {
+    if (!GROQ_API_KEY || !groq) {
       return res.status(500).json({ 
         error: 'Groq API key is not configured. Please set GROQ_API_KEY in your .env file.' 
       });
@@ -36,7 +47,7 @@ export const sendMessage = async (req: Request, res: Response) => {
           content: message,
         },
       ],
-      model: 'llama3-8b-8192',
+      model: 'llama-3.3-70b-versatile',
     });
 
     const botResponse = completion.choices[0]?.message?.content || 'No response from AI';

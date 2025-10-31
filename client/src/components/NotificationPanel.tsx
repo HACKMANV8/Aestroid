@@ -45,26 +45,26 @@ const NotificationPanel: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#1a1a1a] rounded-xl border-2 border-orange-500 shadow-2xl">
+    <div className="flex flex-col h-full bg-[#1a1a1a] rounded-xl border-2 border-orange-500 shadow-2xl overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b-2 border-orange-500/30">
-        <div className="flex items-center gap-3">
-          <svg className="w-6 h-6 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <div className="flex items-center justify-between p-3 sm:p-4 border-b-2 border-orange-500/30 flex-shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <svg className="w-5 h-5 sm:w-6 sm:h-6 text-orange-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
           </svg>
-          <div>
-            <h2 className="text-xl font-bold text-orange-400 uppercase tracking-wide">Command Center</h2>
-            <p className="text-xs text-gray-400">Live Intelligence Feed</p>
+          <div className="min-w-0">
+            <h2 className="text-sm sm:text-base md:text-xl font-bold text-orange-400 uppercase tracking-wide truncate">Command Center</h2>
+            <p className="text-xs text-gray-400 hidden sm:block">Live Intelligence Feed</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0">
           <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-          <span className="text-xs text-gray-400">{isConnected ? 'Active' : 'Offline'}</span>
+          <span className="text-xs text-gray-400 hidden sm:inline">{isConnected ? 'Active' : 'Offline'}</span>
         </div>
       </div>
 
-      {/* Alerts Area */}
-      <div className="flex-1 overflow-y-auto p-4 bg-[#1a1a1a]">
+      {/* Alerts Area - Fixed height with proper overflow */}
+      <div className="flex-1 overflow-y-auto p-3 sm:p-4 bg-[#1a1a1a] min-h-0">
         {alerts.length === 0 ? (
           <div className="text-gray-400 text-center py-12">
             <svg className="w-16 h-16 mx-auto mb-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -117,10 +117,10 @@ const NotificationPanel: React.FC = () => {
       </div>
 
       {alerts.length > 0 && (
-        <div className="p-4 border-t-2 border-orange-500/30 bg-[#1a1a1a]">
+        <div className="p-3 sm:p-4 border-t-2 border-orange-500/30 bg-[#1a1a1a] flex-shrink-0">
           <button
             onClick={clearAlerts}
-            className="w-full bg-orange-500 hover:bg-orange-600 text-white py-2 rounded-lg transition-colors font-semibold uppercase tracking-wide shadow-lg hover:shadow-orange-500/50"
+            className="w-full bg-orange-500 hover:bg-orange-600 text-white py-2 rounded-lg transition-colors font-semibold uppercase tracking-wide shadow-lg hover:shadow-orange-500/50 text-sm sm:text-base"
           >
             Clear All ({alerts.length})
           </button>

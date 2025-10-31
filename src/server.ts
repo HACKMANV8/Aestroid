@@ -14,8 +14,13 @@ const app = express();
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:3000",
-    methods: ["GET", "POST"]
+    origin: (origin, callback) => {
+      // Allow all origins
+      callback(null, true);
+    },
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    credentials: false,
+    allowedHeaders: ["Content-Type", "Authorization"]
   }
 });
 
@@ -31,8 +36,17 @@ if (!GROQ_API_KEY) {
   console.log('✅ Groq API key configured');
 }
 
-// Middleware
-app.use(cors());
+// Middleware - CORS configured to allow all origins
+app.use(cors({
+  origin: '*', // Allow all origins
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false
+}));
+
+// Handle preflight requests
+app.options('*', cors());
+
 app.use(express.json());
 
 // Set up Socket.IO for location controller
