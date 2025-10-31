@@ -13,6 +13,7 @@ from ui_components import (
 
 API_URL = "http://localhost:8080/api/markers"
 UPDATE_INTERVAL = 1.0  # seconds
+SOLDIER_URL = "http://localhost:6969"  # expects JSON: {"lat": <float>, "lon": <float>}
 
 
 # --- Live update client thread ---
@@ -31,6 +32,28 @@ class LiveClient(threading.Thread):
             except Exception as e:
                 # Fail silently to avoid crashing the viewer
                 print(f"⚠️ Live update failed: {e}")
+            time.sleep(UPDATE_INTERVAL)
+
+
+# --- Soldier location client thread ---
+class SoldierClient(threading.Thread):
+    def __init__(self, on_update):
+        super().__init__(daemon=True)
+        self.on_update = on_update
+        self.running = True
+
+    def run(self):
+        while self.running:
+            try:
+                resp = requests.get(SOLDIER_URL, timeout=2)
+                if resp.ok:
+                    payload = resp.json()
+                    lat = payload.get("lat")
+                    lon = payload.get("lon")
+                    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                        self.on_update(float(lat), float(lon))
+            except Exception as e:
+                print(f"⚠️ Soldier fetch failed: {e}")
             time.sleep(UPDATE_INTERVAL)
 
 
@@ -89,6 +112,7 @@ font_small = pygame.font.Font(None, 18)
 gyro_control = GyroControl(GYRO_CENTER, GYRO_RADIUS, font, font_small)
 marker_selector = MarkerSelector(280, 310, WIDTH - 280 - 20, 20, font, font_small)
 markers = []
+location_of_soldier = None  # (lat, lon)
 
 SCALE_X, SCALE_Y, HEIGHT_SCALE = 10, 10, 250
 angle_yaw = np.radians(45)
@@ -137,6 +161,12 @@ def recompute_surface():
     return surf, (px, py)
 
 
+def latlon_to_index(lat, lon):
+    i = int(np.argmin(np.abs(np.array(lats) - lat)))
+    j = int(np.argmin(np.abs(np.array(lons) - lon)))
+    return i, j
+
+
 def get_live_state():
     """Prepare JSON payload for live updates"""
     return {
@@ -160,6 +190,17 @@ def get_live_state():
 # Start live client thread
 live_client = LiveClient(get_live_state)
 live_client.start()
+
+
+def on_soldier_update(lat, lon):
+    global location_of_soldier, needs_redraw
+    location_of_soldier = (lat, lon)
+    needs_redraw = True
+
+
+# Start soldier client thread
+soldier_client = SoldierClient(on_soldier_update)
+soldier_client.start()
 
 # --- Initial terrain render ---
 terrain_surface, points = recompute_surface()
@@ -283,9 +324,23 @@ while running:
     gyro_control.draw(screen, angle_yaw, angle_roll)
     marker_selector.draw(screen)
 
+    # Draw soldier location if available
+    if location_of_soldier and points is not None:
+        try:
+            lat, lon = location_of_soldier
+            si, sj = latlon_to_index(lat, lon)
+            px, py = points
+            sx, sy = int(px[si, sj]), int(py[si, sj])
+            pygame.draw.circle(screen, (255, 80, 80), (sx, sy), 6)
+            label = font_small.render("Soldier", True, (255, 200, 200))
+            screen.blit(label, (sx + 8, sy - 10))
+        except Exception:
+            pass
+
     pygame.display.flip()
     clock.tick(60)
 
 live_client.running = False
+soldier_client.running = False
 pygame.quit()
 
