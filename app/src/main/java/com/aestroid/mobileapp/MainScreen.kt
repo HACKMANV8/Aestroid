@@ -6,6 +6,10 @@ import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -13,30 +17,24 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aestroid.mobileapp.ViewModel.MainViewModel
 import com.aestroid.mobileapp.ViewModel.StrategyUiState
 
+@OptIn(ExperimentalMaterial3Api::class) // Needed for TopAppBar
 @Composable
 fun MainScreen(
-    // This gets the ViewModel and ties it to the screen's lifecycle
     viewModel: MainViewModel = viewModel()
 ) {
-    // 1. Get the Android Context for starting the service
     val context = LocalContext.current
-
-    // 2. Observe the UI state from the ViewModel.
-    // This 'by' keyword makes the Composable automatically
-    // update when the state changes.
     val uiState by viewModel.uiState.collectAsState()
 
-    // 3. Set up the Permission Launcher.
-    // This handles asking the user for location permissions.
+    // --- Permission Launcher ---
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
         onResult = { permissions ->
-            // Check if either fine or coarse location was granted
             if (permissions.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false) ||
                 permissions.getOrDefault(Manifest.permission.ACCESS_COARSE_LOCATION, false)) {
 
@@ -44,86 +42,124 @@ fun MainScreen(
                 startLocationService(context)
 
             } else {
-                // Permission was denied.
-                // In a real app, you'd show a "permission denied" message.
+                // TODO: Show a SnackBar or dialog explaining permission was denied
             }
         }
     )
 
-    // --- The UI Layout ---
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-
-        // --- Data Display Area ---
-        Text(
-            text = "Server Strategy:",
-            style = MaterialTheme.typography.titleLarge
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // This 'when' block automatically reacts to state changes
-        when (val state = uiState) {
-            is StrategyUiState.Loading -> {
-                CircularProgressIndicator()
-                Text(
-                    text = "Waiting for location...",
-                    modifier = Modifier.padding(top = 8.dp)
+    // --- UI Layout ---
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Location Strategy App") },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    titleContentColor = MaterialTheme.colorScheme.primary
                 )
-            }
-            is StrategyUiState.Success -> {
-                Text(
-                    text = state.strategyMessage,
-                    style = MaterialTheme.typography.bodyLarge
-                )
-            }
-            is StrategyUiState.Error -> {
-                Text(
-                    text = state.errorMessage,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.error // Show errors in red
-                )
-            }
+            )
         }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding) // Apply padding from the Scaffold
+                .padding(16.dp), // Apply our own padding
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
 
-        // This pushes the buttons to the bottom of the screen
-        Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(32.dp))
 
-        // --- Control Buttons ---
-        Button(
-            onClick = {
-                // 4. This button's click launches the permission request
-                locationPermissionLauncher.launch(
-                    arrayOf(
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION
+            // --- Data Display Card ---
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = 150.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(24.dp)
+                        .fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    // This 'when' block automatically reacts to state changes
+                    when (val state = uiState) {
+                        is StrategyUiState.Loading -> {
+                            CircularProgressIndicator()
+                            Text(
+                                text = "Waiting for first location update...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(top = 16.dp)
+                            )
+                        }
+                        is StrategyUiState.Success -> {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = "Success",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Text(
+                                text = state.strategyMessage,
+                                style = MaterialTheme.typography.headlineSmall,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(top = 16.dp)
+                            )
+                        }
+                        is StrategyUiState.Error -> {
+                            Icon(
+                                imageVector = Icons.Default.Error,
+                                contentDescription = "Error",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Text(
+                                text = state.errorMessage,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.error,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(top = 16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // This spacer pushes the buttons to the bottom
+            Spacer(modifier = Modifier.weight(1f))
+
+            // --- Control Buttons ---
+            Button(
+                onClick = {
+                    locationPermissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        )
                     )
-                )
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Start Location Tracking")
-        }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Start Location Tracking")
+            }
 
-        Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-        Button(
-            onClick = {
-                // 5. This button calls the ViewModel function
-                viewModel.onUserSendStatusClick()
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Send 'Status' POST Request")
+            OutlinedButton( // Use an OutlinedButton for secondary action
+                onClick = {
+                    viewModel.onUserSendStatusClick()
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Send 'Status' POST Request")
+            }
         }
     }
 }
 
-// A simple helper function to start your LocationService
+// Helper function to start the service
 private fun startLocationService(context: Context) {
     val intent = Intent(context, LocationService::class.java)
     context.startService(intent)
