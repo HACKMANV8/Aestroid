@@ -1,7 +1,6 @@
 package com.aestroid.mobileapp
 
 import android.util.Log
-import com.aestroid.mobileapp.dataclasses.ApiResponse
 import com.aestroid.mobileapp.dataclasses.LocationRequest
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -9,19 +8,29 @@ import kotlinx.coroutines.flow.asSharedFlow
 
 object DataRepository {
     private val apiClient = ApiClient
-    private val _dataFlow = MutableSharedFlow<ApiResponse>()
-    val dataFlow: SharedFlow<ApiResponse> = _dataFlow.asSharedFlow()
-    suspend fun sendLocation(lat: Double, lon: Double) {
+    private val _locationUpdateFlow = MutableSharedFlow<LocationUpdateResult>()
+    val locationUpdateFlow: SharedFlow<LocationUpdateResult> = _locationUpdateFlow.asSharedFlow()
+    
+    sealed class LocationUpdateResult {
+        data class Success(val unitId: String, val lat: Double, val lon: Double) : LocationUpdateResult()
+        data class Error(val message: String) : LocationUpdateResult()
+    }
+    
+    suspend fun sendLocation(unitId: String, unitType: String, lat: Double, lon: Double) {
         val requestBody = LocationRequest(
+            unitId = unitId,
+            unitType = unitType,
             latitude = lat,
-            longitude = lon,
-            timeStamp = System.currentTimeMillis()
+            longitude = lon
         )
         val result = apiClient.sendLocation(requestBody)
-        result.onSuccess { apiResponse ->
-            _dataFlow.emit(apiResponse)
+        result.onSuccess {
+            Log.d("DataRepository", "Location sent successfully: $unitId at ($lat, $lon)")
+            _locationUpdateFlow.emit(LocationUpdateResult.Success(unitId, lat, lon))
         }.onFailure { exception ->
-            Log.e("DataRepository", "Network Error: ${exception.message}")
+            val errorMsg = "Network Error: ${exception.message}"
+            Log.e("DataRepository", errorMsg, exception)
+            _locationUpdateFlow.emit(LocationUpdateResult.Error(errorMsg))
         }
     }
 }

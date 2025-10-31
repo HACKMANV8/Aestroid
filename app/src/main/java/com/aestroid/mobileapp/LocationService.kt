@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import com.aestroid.mobileapp.UnitConfig
 
 class LocationService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -35,12 +36,16 @@ class LocationService : Service() {
                 super.onLocationResult(locationResult)
 
                 locationResult.lastLocation?.let { location ->
-                    Log.d("LocationService", "New location: ${location.latitude}, ${location.longitude}")
+                    val lat = location.latitude
+                    val lon = location.longitude
+                    Log.d("LocationService", "New location: $lat, $lon")
 
                     // We got a location. Launch a coroutine in our service's scope
-                    // to call the DataRepository. This is the main goal!
+                    // to call the DataRepository with unit identification
                     serviceScope.launch {
-                        DataRepository.sendLocation(location.latitude, location.longitude)
+                        val unitId = UnitConfig.getUnitId(this@LocationService)
+                        val unitType = UnitConfig.getUnitType(this@LocationService)
+                        DataRepository.sendLocation(unitId, unitType, lat, lon)
                     }
                 }
             }
@@ -94,7 +99,9 @@ class LocationService : Service() {
         return NotificationCompat.Builder(this, "location") // "location" is the channel ID
             .setContentTitle("Location Tracking Active")
             .setContentText("Your location is being sent to the server.")
-            .setSmallIcon(R.mipmap.ic_launcher) // TODO: Change to your app's icon
+            // TODO: Replace with a proper notification icon (white/transparent icon)
+            // Create a drawable resource with a white icon for better visibility
+            .setSmallIcon(R.mipmap.ic_launcher)
             .setOngoing(true) // Makes it non-dismissible
             .build()
     }

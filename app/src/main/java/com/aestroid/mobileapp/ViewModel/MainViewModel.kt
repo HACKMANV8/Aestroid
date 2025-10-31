@@ -16,14 +16,36 @@ class MainViewModel: ViewModel() {
     private val dataRepository = DataRepository
     private val _uiState = MutableStateFlow<StrategyUiState>(StrategyUiState.Loading)
     val uiState: StateFlow<StrategyUiState> = _uiState.asStateFlow()
+    
+    private val _locationStatus = MutableStateFlow<LocationStatus>(LocationStatus.Idle)
+    val locationStatus: StateFlow<LocationStatus> = _locationStatus.asStateFlow()
+    
+    sealed class LocationStatus {
+        object Idle : LocationStatus()
+        data class Success(val unitId: String, val lat: Double, val lon: Double) : LocationStatus()
+        data class Error(val message: String) : LocationStatus()
+    }
+    
     init {
+        // Observe location update flow
         viewModelScope.launch {
-            dataRepository.dataFlow
+            dataRepository.locationUpdateFlow
                 .catch { exception ->
-                    _uiState.value = StrategyUiState.Error(exception.message ?: "Unknown error")
+                    _locationStatus.value = LocationStatus.Error(exception.message ?: "Unknown error")
                 }
-                .collect { response ->
-                    processResponse(response)
+                .collect { result ->
+                    when (result) {
+                        is DataRepository.LocationUpdateResult.Success -> {
+                            _locationStatus.value = LocationStatus.Success(
+                                result.unitId,
+                                result.lat,
+                                result.lon
+                            )
+                        }
+                        is DataRepository.LocationUpdateResult.Error -> {
+                            _locationStatus.value = LocationStatus.Error(result.message)
+                        }
+                    }
                 }
         }
     }
